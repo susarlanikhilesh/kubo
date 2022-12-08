@@ -271,6 +271,10 @@ func (api *UnixfsAPI) processLink(ctx context.Context, linkres ft.LinkResult, se
 		lnk.Type = coreiface.TFile
 		lnk.Size = linkres.Link.Size
 	case cid.DagProtobuf:
+		if settings.UseCumulativeSize {
+			lnk.Size = linkres.Link.Size
+		}
+
 		if !settings.ResolveChildren {
 			break
 		}
@@ -296,7 +300,9 @@ func (api *UnixfsAPI) processLink(ctx context.Context, linkres ft.LinkResult, se
 				lnk.Type = coreiface.TSymlink
 				lnk.Target = string(d.Data())
 			}
-			lnk.Size = d.FileSize()
+			if !settings.UseCumulativeSize {
+				lnk.Size = d.FileSize()
+			}
 		}
 	}
 

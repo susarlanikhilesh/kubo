@@ -11,12 +11,9 @@ import (
 	"github.com/dustin/go-humanize"
 	cid "github.com/ipfs/go-cid"
 	files "github.com/ipfs/go-ipfs-files"
-	format "github.com/ipfs/go-ipld-format"
-	merkledag "github.com/ipfs/go-merkledag"
 	path "github.com/ipfs/go-path"
 	"github.com/ipfs/go-path/resolver"
-	"github.com/ipfs/go-unixfs"
-	"github.com/ipfs/go-unixfs/hamt"
+	options "github.com/ipfs/interface-go-ipfs-core/options"
 	ipath "github.com/ipfs/interface-go-ipfs-core/path"
 	"github.com/ipfs/kubo/assets"
 	"github.com/ipfs/kubo/tracing"
@@ -108,17 +105,26 @@ func (i *gatewayHandler) serveDirectory(ctx context.Context, w http.ResponseWrit
 		return
 	}
 
-	// Optimization: use Dag.Get to fetch the children links of this directory
-	// instead of UnixFS.LS. Dag.Get is faster and also provides a Size field
-	// that is good enough for a directory listing.
-	links, err := i.getUnixFsLinks(ctx, resolvedPath.Cid())
+	// Optimization: use Unixfs.Ls without resolving children, but using the
+	// cumulative DAG size as the file size. This allows for a fast listing
+	// while keeping a good enough Size field.
+	results, err := i.api.Unixfs().Ls(ctx,
+		resolvedPath,
+		options.Unixfs.ResolveChildren(false),
+		options.Unixfs.UseCumulativeSize(true),
+	)
 	if err != nil {
 		internalWebError(w, err)
 		return
 	}
 
-	dirListing := make([]directoryItem, 0, len(links))
-	for _, link := range links {
+	dirListing := make([]directoryItem, 0, len(results))
+	for link := range results {
+		if link.Err != nil {
+			internalWebError(w, err)
+			return
+		}
+
 		hash := link.Cid.String()
 		di := directoryItem{
 			Size:      humanize.Bytes(uint64(link.Size)),
@@ -201,37 +207,4 @@ func (i *gatewayHandler) serveDirectory(ctx context.Context, w http.ResponseWrit
 
 func getDirListingEtag(dirCid cid.Cid) string {
 	return `"DirIndex-` + assets.AssetHash + `_CID-` + dirCid.String() + `"`
-}
-
-func (i *gatewayHandler) getUnixFsLinks(ctx context.Context, cid cid.Cid) ([]*format.Link, error) {
-	obj, err := i.api.Dag().Get(ctx, cid)
-	if err != nil {
-		return nil, err
-	}
-
-	protoNode, ok := obj.(*merkledag.ProtoNode)
-	if !ok {
-		return obj.Links(), nil
-	}
-
-	fsNode, err := unixfs.FSNodeFromBytes(protoNode.Data())
-	if err != nil {
-		return nil, err
-	}
-
-	if fsNode.Type() == unixfs.THAMTShard {
-		shard, err := hamt.NewHamtFromDag(i.api.Dag(), obj)
-		if err != nil {
-			return nil, err
-		}
-
-		links, err := shard.EnumLinks(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		return links, nil
-	} else {
-		return obj.Links(), nil
-	}
 }
