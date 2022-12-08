@@ -11,9 +11,12 @@ import (
 	"github.com/dustin/go-humanize"
 	cid "github.com/ipfs/go-cid"
 	files "github.com/ipfs/go-ipfs-files"
+	format "github.com/ipfs/go-ipld-format"
+	merkledag "github.com/ipfs/go-merkledag"
 	path "github.com/ipfs/go-path"
 	"github.com/ipfs/go-path/resolver"
-	options "github.com/ipfs/interface-go-ipfs-core/options"
+	"github.com/ipfs/go-unixfs"
+	"github.com/ipfs/go-unixfs/hamt"
 	ipath "github.com/ipfs/interface-go-ipfs-core/path"
 	"github.com/ipfs/kubo/assets"
 	"github.com/ipfs/kubo/tracing"
@@ -105,46 +108,26 @@ func (i *gatewayHandler) serveDirectory(ctx context.Context, w http.ResponseWrit
 		return
 	}
 
-	// Optimization 1:
-	// List children without fetching their root blocks (fast, but no size info)
-	results, err := i.api.Unixfs().Ls(ctx, resolvedPath, options.Unixfs.ResolveChildren(false))
+	// Optimization: use Dag.Get to fetch the children links of this directory
+	// instead of UnixFS.LS. Dag.Get is faster and also provides a Size field
+	// that is good enough for a directory listing.
+	links, err := i.getUnixFsLinks(ctx, resolvedPath.Cid())
 	if err != nil {
 		internalWebError(w, err)
 		return
 	}
 
-	// storage for directory listing
-	dirListing := make([]directoryItem, 0, len(results))
-
-	for link := range results {
-		if link.Err != nil {
-			internalWebError(w, err)
-			return
-		}
+	dirListing := make([]directoryItem, 0, len(links))
+	for _, link := range links {
 		hash := link.Cid.String()
 		di := directoryItem{
-			Size:      "", // no size because we did not fetch child nodes
+			Size:      humanize.Bytes(uint64(link.Size)),
 			Name:      link.Name,
 			Path:      gopath.Join(originalURLPath, link.Name),
 			Hash:      hash,
 			ShortHash: shortHash(hash),
 		}
 		dirListing = append(dirListing, di)
-	}
-
-	// Optimization 2: fetch sizes only for dirs below FastDirIndexThreshold
-	if len(dirListing) < i.config.FastDirIndexThreshold {
-		dirit := dir.Entries()
-		linkNo := 0
-		for dirit.Next() {
-			size := "?"
-			if s, err := dirit.Node().Size(); err == nil {
-				// Size may not be defined/supported. Continue anyways.
-				size = humanize.Bytes(uint64(s))
-			}
-			dirListing[linkNo].Size = size
-			linkNo++
-		}
 	}
 
 	// construct the correct back link
@@ -195,15 +178,14 @@ func (i *gatewayHandler) serveDirectory(ctx context.Context, w http.ResponseWrit
 
 	// See comment above where originalUrlPath is declared.
 	tplData := listingTemplateData{
-		GatewayURL:            gwURL,
-		DNSLink:               dnslink,
-		Listing:               dirListing,
-		Size:                  size,
-		Path:                  contentPath.String(),
-		Breadcrumbs:           breadcrumbs(contentPath.String(), dnslink),
-		BackLink:              backLink,
-		Hash:                  hash,
-		FastDirIndexThreshold: i.config.FastDirIndexThreshold,
+		GatewayURL:  gwURL,
+		DNSLink:     dnslink,
+		Listing:     dirListing,
+		Size:        size,
+		Path:        contentPath.String(),
+		Breadcrumbs: breadcrumbs(contentPath.String(), dnslink),
+		BackLink:    backLink,
+		Hash:        hash,
 	}
 
 	logger.Debugw("request processed", "tplDataDNSLink", dnslink, "tplDataSize", size, "tplDataBackLink", backLink, "tplDataHash", hash)
@@ -219,4 +201,37 @@ func (i *gatewayHandler) serveDirectory(ctx context.Context, w http.ResponseWrit
 
 func getDirListingEtag(dirCid cid.Cid) string {
 	return `"DirIndex-` + assets.AssetHash + `_CID-` + dirCid.String() + `"`
+}
+
+func (i *gatewayHandler) getUnixFsLinks(ctx context.Context, cid cid.Cid) ([]*format.Link, error) {
+	obj, err := i.api.Dag().Get(ctx, cid)
+	if err != nil {
+		return nil, err
+	}
+
+	protoNode, ok := obj.(*merkledag.ProtoNode)
+	if !ok {
+		return obj.Links(), nil
+	}
+
+	fsNode, err := unixfs.FSNodeFromBytes(protoNode.Data())
+	if err != nil {
+		return nil, err
+	}
+
+	if fsNode.Type() == unixfs.THAMTShard {
+		shard, err := hamt.NewHamtFromDag(i.api.Dag(), obj)
+		if err != nil {
+			return nil, err
+		}
+
+		links, err := shard.EnumLinks(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		return links, nil
+	} else {
+		return obj.Links(), nil
+	}
 }
