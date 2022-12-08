@@ -52,6 +52,7 @@ config file at runtime.
     - [`Gateway.NoDNSLink`](#gatewaynodnslink)
     - [`Gateway.HTTPHeaders`](#gatewayhttpheaders)
     - [`Gateway.RootRedirect`](#gatewayrootredirect)
+    - [`Gateway.FastDirIndexThreshold`](#gatewayfastdirindexthreshold)
     - [`Gateway.Writable`](#gatewaywritable)
     - [`Gateway.PathPrefixes`](#gatewaypathprefixes)
     - [`Gateway.PublicGateways`](#gatewaypublicgateways)
@@ -672,6 +673,10 @@ A url to redirect requests for `/` to.
 Default: `""`
 
 Type: `string` (url)
+
+### `Gateway.FastDirIndexThreshold`
+
+**REMOVED**: this option is [no longer necessary](https://github.com/ipfs/kubo/pull/9481).
 
 ### `Gateway.Writable`
 
