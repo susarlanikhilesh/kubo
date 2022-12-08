@@ -96,7 +96,7 @@ func InitWithIdentity(identity Identity) (*Config, error) {
 
 // DefaultConnMgrHighWater is the default value for the connection managers
 // 'high water' mark
-const DefaultConnMgrHighWater = 150
+const DefaultConnMgrHighWater = 120
 
 // DefaultConnMgrLowWater is the default value for the connection managers 'low
 // water' mark

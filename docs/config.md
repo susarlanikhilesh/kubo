@@ -1788,7 +1788,7 @@ HighWater is the number of connections that, when exceeded, will trigger a
 connection GC operation. Note: protected/recently formed connections don't count
 towards this limit.
 
-Default: `150`
+Default: `120`
 
 Type: `optionalInteger`
 
